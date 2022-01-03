@@ -46,7 +46,7 @@ class Model(nn.Module):
         self._node_normalizer = normalization.Normalizer(
             size=3 + common.NodeType.SIZE, name='node_normalizer')
         self._edge_normalizer = normalization.Normalizer(
-            size=4, name='edge_normalizer')  # 2D coord + 3D coord + 2*length = 7
+            size=7, name='edge_normalizer')  # 2D coord + 3D coord + 2*length = 7
         self._model_type = params['model'].__name__
 
         # for stochastic message passing
@@ -139,13 +139,13 @@ class Model(nn.Module):
         mesh_pos = inputs['mesh_pos']
         relative_world_pos = (torch.index_select(input=world_pos, dim=0, index=senders) -
                               torch.index_select(input=world_pos, dim=0, index=receivers))
-        # relative_mesh_pos = (torch.index_select(mesh_pos, 0, senders) -
-        #                      torch.index_select(mesh_pos, 0, receivers))
+        relative_mesh_pos = (torch.index_select(mesh_pos, 0, senders) -
+                             torch.index_select(mesh_pos, 0, receivers))
         edge_features = torch.cat((
             relative_world_pos,
-            torch.norm(relative_world_pos, dim=-1, keepdim=True)), dim=-1)
-            # relative_mesh_pos,
-            # torch.norm(relative_mesh_pos, dim=-1, keepdim=True)), dim=-1)
+            torch.norm(relative_world_pos, dim=-1, keepdim=True),
+            relative_mesh_pos,
+            torch.norm(relative_mesh_pos, dim=-1, keepdim=True)), dim=-1)
 
         mesh_edges = self.core_model.EdgeSet(
             name='mesh_edges',

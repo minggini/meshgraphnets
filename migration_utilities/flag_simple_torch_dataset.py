@@ -120,21 +120,21 @@ class FlagSimpleDatasetIterative(IterableDataset):
 
         def element_operation(trajectory):#$$$
             world_pos = trajectory['world_pos'] 
-            #mesh_pos = trajectory['mesh_pos']
+            mesh_pos = trajectory['mesh_pos']
             node_type = trajectory['node_type']
             face = trajectory['cells']
             target_world_pos = trajectory['target|world_pos']
             prev_world_pos = trajectory['prev|world_pos']
             trajectory_steps = []
-            for i in range(199): #원랜 399
+            for i in range(399): #원랜 399
                 wp = world_pos[i]
-                #mp = mesh_pos[i]
+                mp = mesh_pos[i]
                 twp = target_world_pos[i]
                 nt = node_type[i]
                 c = face[i]
                 pwp = prev_world_pos[i]
-                trajectory_step = {'cloth_pos': wp, 'node_type': nt, 'cells': c,
-                                   'target|cloth_pos': twp, 'prev|cloth_pos': pwp}
+                trajectory_step = {'world_pos': wp, 'node_type': nt, 'cells': c,
+                                   'target|world_pos': twp, 'prev|world_pos': pwp}
                 noisy_trajectory_step = add_noise(trajectory_step)
                 trajectory_steps.append(noisy_trajectory_step)
             return trajectory_steps
@@ -214,7 +214,7 @@ class FlagSimpleDataset(Dataset):
     def add_targets(self):
         print("added~!!!!~!~!!!!!")
         """Adds target and optionally history fields to dataframe."""
-        fields = 'cloth_pos'
+        fields = 'world_pos'
         add_history = True
         def fn(trajectory):
             out = {}
@@ -230,7 +230,7 @@ class FlagSimpleDataset(Dataset):
 
     def split_and_preprocess(self):
         """Splits trajectories into frames, and adds training noise."""
-        noise_field = 'cloth_pos'
+        noise_field = 'world_pos'
         noise_scale = 0.003
         noise_gamma = 0.1
         def add_noise(frame):
@@ -245,22 +245,22 @@ class FlagSimpleDataset(Dataset):
             return frame
 
         def element_operation(trajectory): #$$$
-            world_pos = trajectory['cloth_pos']
-            #mesh_pos = trajectory['mesh_pos']
+            world_pos = trajectory['world_pos']
+            mesh_pos = trajectory['mesh_pos']
             node_type = trajectory['node_type']
-            face = trajectory['face']
-            target_world_pos = trajectory['target|cloth_pos']
-            prev_world_pos = trajectory['prev|cloth_pos']
+            cells = trajectory['cells']
+            target_world_pos = trajectory['target|world_pos']
+            prev_world_pos = trajectory['prev|world_pos']
             trajectory_steps = []
             for i in range(198): # 원랜 399
                 wp = world_pos[i]
-                #mp = mesh_pos[i]
+                mp = mesh_pos[i]
                 twp = target_world_pos[i]
                 nt = node_type[i]
-                c = face[i]
+                c = cells[i]
                 pwp = prev_world_pos[i]
-                trajectory_step = {'cloth_pos': wp, 'node_type': nt, 'face': c,
-                                   'target|cloth_pos': twp, 'prev|cloth_pos': pwp}
+                trajectory_step = {'world_pos': wp, 'node_type': nt, 'cells': c,
+                                   'target|world_pos': twp, 'prev|world_pos': pwp}
                 noisy_trajectory_step = add_noise(trajectory_step)
                 trajectory_steps.append(noisy_trajectory_step)
             return trajectory_steps

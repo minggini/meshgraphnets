@@ -218,7 +218,7 @@ def split_and_preprocess(params, model_type):
         mask = torch.stack(mask_sequence, dim=1)
         noise = torch.where(mask, noise, torch.zeros_like(noise))
         frame[noise_field] += noise
-        # frame['target|' + noise_field] += (1.0 - noise_gamma) * noise
+        frame['target|' + noise_field] += (1.0 - noise_gamma) * noise
         return frame
 
     def element_operation(trajectory):
@@ -312,7 +312,7 @@ def learner(model, params):
     epoch_training_losses = []
 
     count = 0
-    pass_count = 250
+    pass_count = 200
     if FLAGS.model_last_checkpoint_dir is not None:
         pass_count = 0
     all_trajectory_train_losses = []
@@ -326,9 +326,9 @@ def learner(model, params):
         #     if hpc_current_time + epoch_mean_time >= hpc_max_time:
         #         break
 
-        ds_loader = dataset.load_dataset(FLAGS.dataset_dir, 'train_split', batch_size=batch_size,
+        ds_loader = dataset.load_dataset(FLAGS.dataset_dir, 'train', batch_size=batch_size,
                                          prefetch_factor=prefetch_factor,
-                                         add_targets=False, split_and_preprocess=False)
+                                         add_targets=True, split_and_preprocess=True)
         # every time when model.train is called, model will train itself with the whole dataset
         root_logger.info("Epoch " + str(epoch + 1) + "/" + str(FLAGS.epochs))
         epoch_training_loss = 0.0
@@ -336,7 +336,7 @@ def learner(model, params):
         for trajectory_index in range(FLAGS.trajectories):
             root_logger.info("    trajectory index " + str(trajectory_index + 1) + "/" + str(FLAGS.trajectories))
             trajectory = next(ds_iterator) # trajectory는 한 trajectory, 즉, 한 비디오일 듯
-            trajectory = process_trajectory(trajectory, params, model_type, False, True)
+            trajectory = process_trajectory(trajectory, params, model_type, True, True)
             trajectory_loss = 0.0
 
             for data_frame_index, data_frame in enumerate(trajectory): # data_frame은 한 trajectory 속 한 frame일 듯 

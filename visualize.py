@@ -23,7 +23,7 @@ from absl import app
 from absl import flags
 
 import matplotlib as mpl
-mpl.rcParams['animation.ffmpeg_path'] = r'D:\ffmpeg-4.4.1-full_build\bin\ffmpeg.exe'
+mpl.rcParams['animation.ffmpeg_path'] = r'D:\Defaults\ffmpeg-4.4.1-full_build\bin\ffmpeg.exe'
 
 from matplotlib import animation
 import matplotlib.pyplot as plt
@@ -36,7 +36,7 @@ rollout_dir = os.path.join(root_dir, 'output', dataset_name, longest_datetime_da
 FLAGS = flags.FLAGS
 flags.DEFINE_string('rollout_path',
                     #rollout_dir, 
-                    r'C:\Users\MJ\Documents\GitHub\meshgraphnets\output\flag_simple\Mon-Dec-20-15-45-32-2021\rollout\rollout.pkl',
+                    r'C:\Users\MJ\Documents\GitHub\meshgraphnets\output\flag_simple\Fri-Dec-31-22-09-36-2021\rollout\rollout.pkl',
                     'Path to rollout pickle file')
 
 
@@ -66,7 +66,7 @@ def main(unused_argv):
     ax.set_xlim([bound[0][0], bound[1][0]])
     ax.set_ylim([bound[0][1], bound[1][1]])
     ax.set_zlim([bound[0][2], bound[1][2]])
-    pos = rollout_data[traj]['pred_pos'][step].cpu()
+    pos = rollout_data[traj]['gt_pos'][step].cpu()
     faces = rollout_data[traj]['faces'][step].cpu()
     ax.plot_trisurf(pos[:, 0], pos[:, 1], faces, pos[:, 2], shade=True)
     ax.set_title('Trajectory %d Step %d' % (traj, step))
@@ -76,7 +76,7 @@ def main(unused_argv):
   plt.show(block=True)
 
   FFwriter = animation.FFMpegWriter(fps=60)
-  anim.save(r"D:\flag_animation_gt.mp4", writer=FFwriter)
+  anim.save(r"D:\flag_simple_gt.mp4", writer=FFwriter)
 
 
 if __name__ == '__main__':
