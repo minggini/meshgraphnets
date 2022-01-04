@@ -14,14 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ============================================================================
-"""Model for CylinderFlow."""
+"""Model for FlagSimple."""
+
+import torch
+from torch import nn as nn
+import torch.nn.functional as F
+# from torch_cluster import random_walk
+import functools
 
 import common
 import normalization
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import encode_process_decode
 import encode_process_decode_max_pooling
 import encode_process_decode_lstm
@@ -31,7 +33,7 @@ device = torch.device('cuda')
 
 
 class Model(nn.Module):
-    """Model for fluid simulation."""
+    """Model for static cloth simulation."""
 
     def __init__(self, params, core_model_name=encode_process_decode, message_passing_aggregator='sum',
                  message_passing_steps=15, attention=False, ripple_used=False, ripple_generation=None,
@@ -40,10 +42,20 @@ class Model(nn.Module):
                  ripple_node_ncross=None):
         super(Model, self).__init__()
         self._params = params
-        self._output_normalizer = normalization.Normalizer(size=2, name='output_normalizer')
-        self._node_normalizer = normalization.Normalizer(size=2 + common.NodeType.SIZE, name='node_normalizer')
-        self._edge_normalizer = normalization.Normalizer(size=3, name='edge_normalizer')  # 2D coord + length
+        self._output_normalizer = normalization.Normalizer(size=3, name='output_normalizer')
+        self._node_normalizer = normalization.Normalizer(
+            size=3 + common.NodeType.SIZE, name='node_normalizer')
+        self._edge_normalizer = normalization.Normalizer(
+            size=7, name='edge_normalizer')  # 2D coord + 3D coord + 2*length = 7
         self._model_type = params['model'].__name__
+
+        # for stochastic message passing
+        '''
+        self.random_walk_generation_interval = 399
+        self.input_count = 0
+        self.sto_mat = None
+        self.normalized_adj_mat = None
+        '''
 
         self.core_model_name = core_model_name
         self.core_model = self.select_core_model(core_model_name)
@@ -91,22 +103,49 @@ class Model(nn.Module):
 
     def _build_graph(self, inputs, is_training):
         """Builds input graph."""
+        world_pos = inputs['world_pos']
+        prev_world_pos = inputs['prev|world_pos']
         node_type = inputs['node_type']
-        velocity = inputs['velocity']
-        node_type = F.one_hot(node_type[:, 0].to(torch.int64), common.NodeType.SIZE)
+        velocity = world_pos - prev_world_pos
+        one_hot_node_type = F.one_hot(node_type[:, 0].to(torch.int64), common.NodeType.SIZE)
 
-        node_features = torch.cat((velocity, node_type), dim=-1)
+        node_features = torch.cat((velocity, one_hot_node_type), dim=-1)
 
         cells = inputs['cells']
         decomposed_cells = common.triangles_to_edges(cells)
         senders, receivers = decomposed_cells['two_way_connectivity']
-
+        '''
+        Stochastic matrix and adjacency matrix
+        Reference: a simple and general graph neural network with stochastic message passing
+        '''
+        '''
+        if self.stochastic_message_passing_used and self.input_count % self.random_walk_generation_interval == 0:
+            start = torch.tensor(range(node_type.shape[0]), device=device)
+            self.sto_mat = random_walk(receivers, senders, start, walk_length=20)
+            adj_index = torch.stack((receivers, senders), dim=0)
+            adj_index = adj_index.tolist()
+            adj_mat = torch.sparse_coo_tensor(adj_index, [1] * receivers.shape[0],
+                                              (node_type.shape[0], node_type.shape[0]), device=device)
+            self_loop_mat = torch.diag(torch.tensor([1.0] * node_type.shape[0], device=device))
+            self_loop_adj_mat = self_loop_mat + adj_mat
+            adj_mat = torch.sparse.sum(adj_mat, dim=1)
+            adj_mat = torch.sqrt(adj_mat).to_dense()
+            square_root_degree_mat = torch.diag(adj_mat)
+            inversed_square_root_degree_mat = torch.inverse(square_root_degree_mat)
+            self.normalized_adj_mat = torch.matmul(inversed_square_root_degree_mat, self_loop_adj_mat)
+            self.normalized_adj_mat = torch.matmul(self.normalized_adj_mat, inversed_square_root_degree_mat)
+        self.input_count += 1
+        '''
         mesh_pos = inputs['mesh_pos']
+        relative_world_pos = (torch.index_select(input=world_pos, dim=0, index=senders) -
+                              torch.index_select(input=world_pos, dim=0, index=receivers))
         relative_mesh_pos = (torch.index_select(mesh_pos, 0, senders) -
                              torch.index_select(mesh_pos, 0, receivers))
-        edge_features = torch.cat([
+        edge_features = torch.cat((
+            relative_world_pos,
+            torch.norm(relative_world_pos, dim=-1, keepdim=True),
             relative_mesh_pos,
-            torch.norm(relative_mesh_pos, dim=-1, keepdim=True)], dim=-1)
+            torch.norm(relative_mesh_pos, dim=-1, keepdim=True)), dim=-1)
 
         mesh_edges = self.core_model.EdgeSet(
             name='mesh_edges',
@@ -116,8 +155,8 @@ class Model(nn.Module):
 
         if self.core_model == encode_process_decode and self._ripple_used == True:
             return self.core_model.MultiGraphWithPos(node_features=self._node_normalizer(node_features, is_training),
-                                                     edge_sets=[mesh_edges], target_feature=velocity, mesh_pos=mesh_pos,
-                                                     model_type=self._model_type)
+                                                     edge_sets=[mesh_edges], target_feature=world_pos,
+                                                     mesh_pos=mesh_pos, model_type=self._model_type)
         else:
             return self.core_model.MultiGraph(node_features=self._node_normalizer(node_features, is_training),
                                               edge_sets=[mesh_edges])
@@ -131,10 +170,14 @@ class Model(nn.Module):
 
     def _update(self, inputs, per_node_network_output):
         """Integrate model outputs."""
-        velocity_update = self._output_normalizer.inverse(per_node_network_output)
+
+        acceleration = self._output_normalizer.inverse(per_node_network_output)
+
         # integrate forward
-        cur_velocity = inputs['velocity']
-        return cur_velocity + velocity_update
+        cur_position = inputs['world_pos']
+        prev_position = inputs['prev|world_pos']
+        position = 2 * cur_position + acceleration - prev_position
+        return position
 
     def get_output_normalizer(self):
         return self._output_normalizer

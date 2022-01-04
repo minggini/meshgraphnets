@@ -15,7 +15,7 @@
 # limitations under the License.
 # ============================================================================
 """Model for FlagSimple."""
-
+import numpy as np
 import torch
 from torch import nn as nn
 import torch.nn.functional as F
@@ -46,7 +46,7 @@ class Model(nn.Module):
         self._node_normalizer = normalization.Normalizer(
             size=3 + common.NodeType.SIZE, name='node_normalizer')
         self._edge_normalizer = normalization.Normalizer(
-            size=7, name='edge_normalizer')  # 2D coord + 3D coord + 2*length = 7
+            size=4, name='edge_normalizer')  # 3D coord + 1*length = 4
         self._model_type = params['model'].__name__
 
         # for stochastic message passing
@@ -103,17 +103,18 @@ class Model(nn.Module):
 
     def _build_graph(self, inputs, is_training):
         """Builds input graph."""
-        world_pos = inputs['world_pos']
-        prev_world_pos = inputs['prev|world_pos']
+        cloth_pos = inputs['cloth_pos']
+        #prev_cloth_pos = inputs['prev|world_pos']
         node_type = inputs['node_type']
-        velocity = world_pos - prev_world_pos
+        velocity = inputs['cloth_vel']
+        #velocity = cloth_pos - prev_cloth_pos
         one_hot_node_type = F.one_hot(node_type[:, 0].to(torch.int64), common.NodeType.SIZE)
 
         node_features = torch.cat((velocity, one_hot_node_type), dim=-1)
 
-        cells = inputs['cells']
-        decomposed_cells = common.triangles_to_edges(cells)
-        senders, receivers = decomposed_cells['two_way_connectivity']
+        face = inputs['face']
+        decomposed_face = common.triangles_to_edges(face)
+        senders, receivers = decomposed_face['two_way_connectivity']
         '''
         Stochastic matrix and adjacency matrix
         Reference: a simple and general graph neural network with stochastic message passing
@@ -137,16 +138,16 @@ class Model(nn.Module):
             self.normalized_adj_mat = torch.matmul(self.normalized_adj_mat, inversed_square_root_degree_mat)
         self.input_count += 1
         '''
-        mesh_pos = inputs['mesh_pos']
-        relative_world_pos = (torch.index_select(input=world_pos, dim=0, index=senders) -
-                              torch.index_select(input=world_pos, dim=0, index=receivers))
-        relative_mesh_pos = (torch.index_select(mesh_pos, 0, senders) -
-                             torch.index_select(mesh_pos, 0, receivers))
+        #mesh_pos = inputs['mesh_pos']
+        relative_world_pos = (torch.index_select(input=cloth_pos, dim=0, index=senders) 
+                                - torch.index_select(input=cloth_pos, dim=0, index=receivers))
+        # relative_mesh_pos = (torch.index_select(mesh_pos, 0, senders) -
+        #                      torch.index_select(mesh_pos, 0, receivers))
         edge_features = torch.cat((
             relative_world_pos,
-            torch.norm(relative_world_pos, dim=-1, keepdim=True),
-            relative_mesh_pos,
-            torch.norm(relative_mesh_pos, dim=-1, keepdim=True)), dim=-1)
+            torch.norm(relative_world_pos, dim=-1, keepdim=True)), dim=-1)
+            # relative_mesh_pos,
+            # torch.norm(relative_mesh_pos, dim=-1, keepdim=True)), dim=-1)
 
         mesh_edges = self.core_model.EdgeSet(
             name='mesh_edges',
@@ -156,8 +157,8 @@ class Model(nn.Module):
 
         if self.core_model == encode_process_decode and self._ripple_used == True:
             return self.core_model.MultiGraphWithPos(node_features=self._node_normalizer(node_features, is_training),
-                                                     edge_sets=[mesh_edges], target_feature=world_pos,
-                                                     mesh_pos=mesh_pos, model_type=self._model_type)
+                                                     edge_sets=[mesh_edges], target_feature=cloth_pos,
+                                                     model_type=self._model_type)
         else:
             return self.core_model.MultiGraph(node_features=self._node_normalizer(node_features, is_training),
                                               edge_sets=[mesh_edges])
@@ -171,13 +172,14 @@ class Model(nn.Module):
 
     def _update(self, inputs, per_node_network_output):
         """Integrate model outputs."""
-
+        dt = 1./50./8.
         acceleration = self._output_normalizer.inverse(per_node_network_output)
-
         # integrate forward
-        cur_position = inputs['world_pos']
-        prev_position = inputs['prev|world_pos']
-        position = 2 * cur_position + acceleration - prev_position
+        #prev_position = inputs['prev|world_pos']
+        cur_position = inputs['cloth_pos']
+        velocity = inputs['cloth_vel']
+        position = cur_position + (velocity + acceleration) * dt
+        #position = 2 * cur_position + acceleration - prev_position
         return position
 
     def get_output_normalizer(self):

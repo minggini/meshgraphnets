@@ -27,9 +27,9 @@ from absl import flags
 import torch
 
 import cloth_model
+import cloth_model_original
 import cloth_eval
-import cfd_model
-import cfd_eval
+import skirt_eval
 
 import dataset
 import common
@@ -51,18 +51,21 @@ import matplotlib.pyplot as plt
 
 device = torch.device('cuda')
 
+os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
 # train and evaluation configuration
 FLAGS = flags.FLAGS
-flags.DEFINE_enum('model', 'cloth', ['cfd', 'cloth'],
+flags.DEFINE_enum('model', 'cloth', ['cfd', 'cloth','skirt'],
                   'Select model to run.')
-flags.DEFINE_enum('mode', 'all', ['train', 'eval', 'all'],
+flags.DEFINE_enum('mode', 'eval', ['train', 'eval', 'all'],
                   'Train model, or run evaluation, or run both.')
 flags.DEFINE_enum('rollout_split', 'valid', ['train', 'test', 'valid'],
                   'Dataset split to use for rollouts.')
 
-flags.DEFINE_integer('epochs', 6, 'No. of training epochs')
-flags.DEFINE_integer('trajectories', 2, 'No. of training trajectories')
-flags.DEFINE_integer('num_rollouts', 2, 'No. of rollout trajectories')
+flags.DEFINE_integer('epochs', 1000, 'No. of training epochs') #original was 1,000,000
+flags.DEFINE_integer('trajectories', 1000, 'No. of training trajectories')
+flags.DEFINE_integer('num_rollouts', 10, 'No. of rollout trajectories')
 
 # core model configuration
 flags.DEFINE_enum('core_model', 'encode_process_decode',
@@ -70,13 +73,12 @@ flags.DEFINE_enum('core_model', 'encode_process_decode',
                    'encode_process_decode_graph_structure_watcher', 'encode_process_decode_ripple'],
                   'Core model to be used')
 flags.DEFINE_enum('message_passing_aggregator', 'min', ['sum', 'max', 'min', 'mean'], 'No. of training epochs')
-flags.DEFINE_integer('message_passing_steps', 1, 'No. of training epochs')
-flags.DEFINE_boolean('attention', True, 'whether attention is used or not')
+flags.DEFINE_integer('message_passing_steps', 3, 'No. of training epochs')
+flags.DEFINE_boolean('attention', False, 'whether attention is used or not')
 
 # ripple method configuration
 '''
 ripple_used defines whether ripple is used, if not, core model of original paper will be used
-
 ripple_generation defines how the ripples are generated:
     equal_size: all ripples have almost equal size of nodes
     gradient: ripples are generated according to node feature similarity
@@ -86,7 +88,6 @@ ripple_node_selection defines how the nodes are selected from each ripple:
     random: a specific number of nodes are selected randomly from each ripple
     all: all nodes of the ripple are selected
     top: a specific number of nodes with the most influential features are selected
-
 ripple_node_connection defines how the selected nodes of each ripple connect with each other to propagate message faster:
     most_influential: the most influential node connects all the other selected nodes
     fully_connected: all the selected nodes are connected with each other
@@ -111,12 +112,17 @@ start = time.time()
 start_datetime = datetime.datetime.fromtimestamp(start).strftime('%c')
 start_datetime_dash = start_datetime.replace(" ", "-").replace(":", "-")
 
+longest_datetime_dash = 'Mon-Dec-20-15-45-32-2021' #Thu-Dec-23-20-11-20-2021'
+
+
 root_dir = pathlib.Path(__file__).parent.resolve()
 dataset_name = 'flag_simple'
 # dataset_name = 'cylinder_flow'
-dataset_dir = os.path.join(root_dir, 'data', dataset_name)
+dataset_dir = os.path.join(root_dir, 'dataset', dataset_name)
 output_dir = os.path.join(root_dir, 'output', dataset_name)
 run_dir = os.path.join(output_dir, start_datetime_dash)
+
+longest_dir = os.path.join(output_dir, longest_datetime_dash)
 
 # directory setting
 flags.DEFINE_string('dataset_dir',
@@ -133,23 +139,26 @@ flags.DEFINE_string('logging_dir',
                     'Log file directory')
 flags.DEFINE_string('model_last_checkpoint_dir',
                     None,
-                    # os.path.join('C:\\Users\\Mark\\iCloudDrive\\master_arbeit\\implementation\\meshgraphnets\\output\\flag_simple\\Tue-Nov-30-17-03-11-2021', 'checkpoint_dir'),
+                    #os.path.join(longest_dir, 'last_checkpoint_dir'),
+                    #os.path.join('C:\\Users\\Mark\\iCloudDrive\\master_arbeit\\implementation\\meshgraphnets\\output\\flag_simple\\Tue-Nov-30-17-04-40-2021', 'checkpoint_dir'),
                     'Path to the checkpoint file of a network that should continue training')
 flags.DEFINE_string('optimizer_last_checkpoint_file',
                     None,
+                    #os.path.join(longest_dir, 'epoch_optimizer_checkpoint_1.pth'),
                     # 'C:\\Users\\Mark\\iCloudDrive\\master_arbeit\\implementation\\meshgraphnets\\output\\Sun-Sep-26-23-06-14-2021\\epoch_optimizer_checkpoint_1.pth',
                     'Path to the checkpoint file of a network that should continue training')
 flags.DEFINE_string('last_checkpoint_file',
                     None,
+                    #os.path.join(longest_dir, 'epoch_scheduler_checkpoint_1.pth'),
                     # 'C:\\Users\\Mark\\iCloudDrive\\master_arbeit\\implementation\\meshgraphnets\\output\\Sun-Sep-26-23-06-14-2021\\epoch_scheduler_checkpoint_1.pth',
                     'Path to the checkpoint file of a network that should continue training')
 
 PARAMETERS = {
-    'cfd': dict(noise=0.02, gamma=1.0, field='velocity', history=False,
-                size=2, batch=2, model=cfd_model, evaluator=cfd_eval, loss_type='cfd',
-                stochastic_message_passing_used='False'),
     'cloth': dict(noise=0.003, gamma=0.1, field='world_pos', history=True,
-                  size=3, batch=1, model=cloth_model, evaluator=cloth_eval, loss_type='cloth',
+                  size=3, batch=1, model=cloth_model_original, evaluator=cloth_eval, loss_type='cloth',
+                  stochastic_message_passing_used='False'),
+    'skirt': dict(noise=0.003, gamma=0.1, field='cloth_pos', history=True,
+                  size=3, batch=1, model=cloth_model, evaluator=skirt_eval, loss_type='skirt',
                   stochastic_message_passing_used='False')
 }
 
@@ -213,28 +222,6 @@ def split_and_preprocess(params, model_type):
         return frame
 
     def element_operation(trajectory):
-        '''
-        if model_type == 'cloth':
-            world_pos = trajectory['world_pos']
-            mesh_pos = trajectory['mesh_pos']
-            node_type = trajectory['node_type']
-            cells = trajectory['cells']
-            target_world_pos = trajectory['target|world_pos']
-            prev_world_pos = trajectory['prev|world_pos']
-            trajectory_steps = []
-            for i in range(399):
-                wp = world_pos[i]
-                mp = mesh_pos[i]
-                twp = target_world_pos[i]
-                nt = node_type[i]
-                c = cells[i]
-                pwp = prev_world_pos[i]
-                trajectory_step = {'world_pos': wp, 'mesh_pos': mp, 'node_type': nt, 'cells': c,
-                                   'target|world_pos': twp, 'prev|world_pos': pwp}
-                noisy_trajectory_step = add_noise(trajectory_step)
-                trajectory_steps.append(noisy_trajectory_step)
-            return trajectory_steps
-        '''
         trajectory_steps = []
         for i in range(steps):
             trajectory_step = {}
@@ -314,8 +301,8 @@ def learner(model, params):
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, 0.1 + 1e-6, last_epoch=-1)
     trained_epoch = 0
     if FLAGS.model_last_checkpoint_dir is not None:
-        optimizer.load_state_dict(torch.load(os.path.join(FLAGS.model_last_checkpoint_dir, "optimizer_checkpoint.pth")))
-        scheduler.load_state_dict(torch.load(os.path.join(FLAGS.model_last_checkpoint_dir, "scheduler_checkpoint.pth")))
+        optimizer.load_state_dict(torch.load(os.path.join(FLAGS.model_last_checkpoint_dir, "epoch_optimizer_checkpoint_0.pth")))
+        scheduler.load_state_dict(torch.load(os.path.join(FLAGS.model_last_checkpoint_dir, "epoch_scheduler_checkpoint_0.pth")))
         epoch_checkpoint = torch.load(os.path.join(FLAGS.model_last_checkpoint_dir, "epoch_checkpoint.pth"))
         trained_epoch = epoch_checkpoint['epoch'] + 1
 
@@ -325,7 +312,7 @@ def learner(model, params):
     epoch_training_losses = []
 
     count = 0
-    pass_count = 500
+    pass_count = 200
     if FLAGS.model_last_checkpoint_dir is not None:
         pass_count = 0
     all_trajectory_train_losses = []
@@ -334,10 +321,10 @@ def learner(model, params):
 
         # check whether the rest time is sufficient for running a whole epoch; stop running if not
         hpc_current_time = time.time()
-        if len(epoch_run_times) != 0:
-            epoch_mean_time = sum(epoch_run_times) // len(epoch_run_times)
-            if hpc_current_time + epoch_mean_time >= hpc_max_time:
-                break
+        # if len(epoch_run_times) != 0:
+        #     epoch_mean_time = sum(epoch_run_times) // len(epoch_run_times)
+        #     if hpc_current_time + epoch_mean_time >= hpc_max_time:
+        #         break
 
         ds_loader = dataset.load_dataset(FLAGS.dataset_dir, 'train', batch_size=batch_size,
                                          prefetch_factor=prefetch_factor,
@@ -348,16 +335,17 @@ def learner(model, params):
         ds_iterator = iter(ds_loader)
         for trajectory_index in range(FLAGS.trajectories):
             root_logger.info("    trajectory index " + str(trajectory_index + 1) + "/" + str(FLAGS.trajectories))
-            trajectory = next(ds_iterator)
+            trajectory = next(ds_iterator) # trajectory는 한 trajectory, 즉, 한 비디오일 듯
             trajectory = process_trajectory(trajectory, params, model_type, True, True)
             trajectory_loss = 0.0
-            for data_frame_index, data_frame in enumerate(trajectory):
+
+            for data_frame_index, data_frame in enumerate(trajectory): # data_frame은 한 trajectory 속 한 frame일 듯 
                 count += 1
                 data_frame = squeeze_data_frame(data_frame)
                 network_output = model(data_frame, is_training)
                 loss = loss_fn(loss_type, data_frame, network_output, model, params)
-                if count % 1000 == 0:
-                    root_logger.info("    1000 step loss " + str(loss))
+                if count % 100 == 0:
+                    root_logger.info("    100 step loss " + str(loss))
                 if pass_count > 0:
                     pass_count -= 1
                 else:
@@ -365,6 +353,8 @@ def learner(model, params):
                     loss.backward()
                     optimizer.step()
                     trajectory_loss += loss.detach().cpu()
+
+            # 이렇게 다 돌고 나면 한 trjectory 에 대한 loss 바탕으로 1번 업데이트! 즉, batch=1이니까 1 batch = 1 trajectory 당 1번 업데이트!
             all_trajectory_train_losses.append(trajectory_loss)
             epoch_training_loss += trajectory_loss
             root_logger.info("        trajectory_loss")
@@ -378,6 +368,8 @@ def learner(model, params):
             torch.save(scheduler.state_dict(),
                        os.path.join(FLAGS.checkpoint_dir,
                                     "trajectory_scheduler_checkpoint" + "_" + str((epoch + 1) % 2) + ".pth"))
+        
+        # 전체! 데이터셋, 즉 여러개의 trajectory에 대해서 1번 다 돎, 즉, 1 epoch!
         epoch_training_losses.append(epoch_training_loss)
         root_logger.info("Current mean of epoch training losses")
         root_logger.info(torch.mean(torch.stack(epoch_training_losses)))
@@ -409,7 +401,25 @@ def learner(model, params):
 def loss_fn(loss_type, inputs, network_output, model, params):
     """L2 loss on position."""
     # build target acceleration
-    if loss_type == 'cloth':
+    if loss_type == 'skirt':
+        # cloth_pos = inputs['cloth_pos']
+        # prev_cloth_pos = inputs['prev|cloth_pos']
+        # target_cloth_pos = inputs['target|cloth_pos']
+
+        #cur_position = cloth_pos
+        # prev_position = prev_cloth_pos
+        # target_position = target_cloth_pos
+        target_acceleration = inputs['dv_colfree'] 
+        target_normalized = model.get_output_normalizer()(target_acceleration).to(device)
+
+        # build loss
+        node_type = inputs['node_type']
+        loss_mask = torch.eq(node_type[:, 0], torch.tensor([common.NodeType.NORMAL.value], device=device).int())
+        error = torch.sum((target_normalized - network_output) ** 2, dim=1)
+        loss = torch.mean(error[loss_mask])
+        return loss
+    
+    elif loss_type == 'cloth':
         world_pos = inputs['world_pos']
         prev_world_pos = inputs['prev|world_pos']
         target_world_pos = inputs['target|world_pos']
@@ -426,6 +436,7 @@ def loss_fn(loss_type, inputs, network_output, model, params):
         error = torch.sum((target_normalized - network_output) ** 2, dim=1)
         loss = torch.mean(error[loss_mask])
         return loss
+
     elif loss_type == 'cfd':
         cur_velocity = inputs['velocity']
         target_velocity = inputs['target|velocity']
@@ -446,7 +457,7 @@ def evaluator(params, model):
     root_logger = logging.getLogger()
     model_type = FLAGS.model
     """Run a model rollout trajectory."""
-    ds_loader = dataset.load_dataset(FLAGS.dataset_dir, FLAGS.rollout_split, add_targets=True)
+    ds_loader = dataset.load_dataset(FLAGS.dataset_dir, FLAGS.rollout_split, add_targets=True)#False, split_and_preprocess=False)
     ds_iterator = iter(ds_loader)
     trajectories = []
 
@@ -459,7 +470,10 @@ def evaluator(params, model):
         _, prediction_trajectory = params['evaluator'].evaluate(model, trajectory)
         mse_loss_fn = torch.nn.MSELoss()
         l1_loss_fn = torch.nn.L1Loss()
-        if model_type == 'cloth':
+        if model_type == 'skirt':
+            mse_loss = mse_loss_fn(torch.squeeze(trajectory['cloth_pos'], dim=0), prediction_trajectory['pred_pos'])
+            l1_loss = l1_loss_fn(torch.squeeze(trajectory['cloth_pos'], dim=0), prediction_trajectory['pred_pos'])
+        elif model_type == 'cloth':
             mse_loss = mse_loss_fn(torch.squeeze(trajectory['world_pos'], dim=0), prediction_trajectory['pred_pos'])
             l1_loss = l1_loss_fn(torch.squeeze(trajectory['world_pos'], dim=0), prediction_trajectory['pred_pos'])
         elif model_type == 'cfd':
@@ -523,12 +537,15 @@ def main(argv):
         Path(FLAGS.checkpoint_dir).mkdir(parents=True, exist_ok=True)
 
     if FLAGS.mode == "eval" or is_all:
-        # find latest directory in output directory
-        all_subdirs = os.listdir(output_dir)
-        all_subdirs = map(lambda d: os.path.join(output_dir, d), all_subdirs)
-        all_subdirs = [d for d in all_subdirs if os.path.isdir(d)]
-        latest_subdir = max(all_subdirs, key=os.path.getmtime)
-        run_dir = latest_subdir
+        if FLAGS.model_last_checkpoint_dir is not None:
+            run_dir = Path(FLAGS.model_last_checkpoint_dir).parents[0]
+        else:
+            # find latest directory in output directory
+            all_subdirs = os.listdir(output_dir)
+            all_subdirs = map(lambda d: os.path.join(output_dir, d), all_subdirs)
+            all_subdirs = [d for d in all_subdirs if os.path.isdir(d)]
+            latest_subdir = max(all_subdirs, key=os.path.getmtime)
+            run_dir = latest_subdir
         # save program configuration in file title
         if not is_all:
             run_config_record = FLAGS.mode + "_rollout" + str(FLAGS.num_rollouts)
@@ -562,7 +579,8 @@ def main(argv):
                                       FLAGS.ripple_node_connection,
                                       FLAGS.ripple_node_ncross)
         if FLAGS.model_last_checkpoint_dir is not None:
-            model.load_model(os.path.join(FLAGS.model_last_checkpoint_dir, "model_checkpoint"))
+            model.load_model(os.path.join(FLAGS.model_last_checkpoint_dir, "epoch_checkpoint.pth"))
+            #model.load_model(os.path.join(FLAGS.model_last_checkpoint_dir, "model_checkpoint"))
             root_logger.info(
                 "Loaded checkpoint file in " + str(FLAGS.model_last_checkpoint_dir) + "and starting retraining...")
         model.to(device)
@@ -591,7 +609,7 @@ def main(argv):
             root_logger.info("  Ripple node selection number is " + str(FLAGS.ripple_node_selection_random_top_n))
             root_logger.info("  Ripple node connection method is " + str(FLAGS.ripple_node_connection))
             root_logger.info("  Ripple node ncross number is " + str(FLAGS.ripple_node_ncross))
-        root_logger.info("Run output directory is " + run_dir)
+        root_logger.info("Run output directory is " + str(run_dir))
         root_logger.info("=======================Run Summary=======================")
         root_logger.info("")
 
@@ -633,11 +651,11 @@ def main(argv):
                                       FLAGS.ripple_node_connection,
                                       FLAGS.ripple_node_ncross)
         if FLAGS.model_last_checkpoint_dir is not None:
-            model.load_model(os.path.join(FLAGS.model_last_checkpoint_dir, "model_checkpoint"))
+            model.load_model(os.path.join(FLAGS.model_last_checkpoint_dir, "epoch_model_checkpoint_0"))
             root_logger.info(
                 "Loaded checkpoint file in " + str(FLAGS.model_last_checkpoint_dir) + "and starting retraining...")
         else:
-            model.load_model(os.path.join(run_dir, "checkpoint_dir", "model_checkpoint"))
+            model.load_model(os.path.join(run_dir, "checkpoint_dir", "epoch_model_checkpoint_0"))
             root_logger.info("Loaded model from " + str(run_dir))
         model.evaluate()
         model.to(device)
@@ -666,7 +684,10 @@ def main(argv):
             saved_elapsed_time_in_second = pickle.load(pickle_file)
         elapsed_time_in_second += saved_elapsed_time_in_second
     elapsed_time = str(datetime.timedelta(seconds=elapsed_time_in_second))
-    elapsed_time_in_second_pkl_file = os.path.join(FLAGS.logging_dir, 'elapsed_time_in_second.pkl')
+    if FLAGS.model_last_checkpoint_dir is not None:
+        elapsed_time_in_second_pkl_file = os.path.join(os.path.join(run_dir, 'logs'), 'elapsed_time_in_second.pkl')
+    else:
+        elapsed_time_in_second_pkl_file = os.path.join(FLAGS.logging_dir, 'elapsed_time_in_second.pkl')
     Path(elapsed_time_in_second_pkl_file).touch()
     with open(elapsed_time_in_second_pkl_file, 'wb') as f:
         pickle.dump(elapsed_time_in_second, f)
@@ -693,7 +714,7 @@ def main(argv):
         root_logger.info("  Ripple node connection method is " + str(FLAGS.ripple_node_connection))
         root_logger.info("  Ripple node ncross number is " + str(FLAGS.ripple_node_ncross))
     root_logger.info("Elapsed time " + elapsed_time)
-    root_logger.info("Run output directory is " + run_dir)
+    root_logger.info("Run output directory is " + str(run_dir))
     root_logger.info("=======================Run Summary=======================")
     root_logger.info("")
     root_logger.info("--------------------train loss record--------------------")
@@ -708,7 +729,10 @@ def main(argv):
     root_logger.info("")
     root_logger.info("--------------------eval loss record---------------------")
     if FLAGS.mode == "eval" or FLAGS.mode == "all":
-        eval_loss_pkl_file = os.path.join(FLAGS.logging_dir, 'eval_loss.pkl')
+        if FLAGS.model_last_checkpoint_dir is not None:
+            eval_loss_pkl_file = os.path.join(os.path.join(run_dir, 'logs'), 'eval_loss.pkl')
+        else:
+            eval_loss_pkl_file = os.path.join(FLAGS.logging_dir, 'eval_loss.pkl')
         Path(eval_loss_pkl_file).touch()
         with open(eval_loss_pkl_file, 'wb') as f:
             pickle.dump(eval_loss_record, f)
@@ -741,7 +765,8 @@ def main(argv):
         description.append("    Ripple node connection method is " + str(FLAGS.ripple_node_connection) + "\n")
         description.append("    Ripple node ncross number is " + str(FLAGS.ripple_node_ncross) + "\n")
     description.append("Elapsed time " + elapsed_time + "\n")
-    description.append("Train mean elapsed time " + train_mean_elapsed_time + "\n")
+    if FLAGS.mode == 'train' or FLAGS.mode == 'all':
+        description.append("Train mean elapsed time " + train_mean_elapsed_time + "\n")
     description_txt = ""
     for item in description:
         description_txt += item
@@ -794,7 +819,10 @@ def main(argv):
     fig.savefig(os.path.join(run_dir, "logs", "Train_and_Eval_Loss.png"))
 
     # save max, min and mean value of train and eval losses as csv
-    csv_path = os.path.join(FLAGS.logging_dir, 'result.csv')
+    if FLAGS.model_last_checkpoint_dir is not None:
+        csv_path = os.path.join(os.path.join(run_dir, 'logs'), 'result.csv')
+    else:
+        csv_path = os.path.join(FLAGS.logging_dir, 'result.csv')
     try:
         Path(csv_path).touch()
     except FileExistsError:
@@ -908,7 +936,8 @@ def main(argv):
             entry.append(["Ripple node connection method", ""])
             entry.append(["Ripple node ncross number", ""])
         entry.append(["Elapsed time", elapsed_time])
-        entry.append(["Train mean elapsed time", train_mean_elapsed_time])
+        if FLAGS.mode == 'train' or FLAGS.mode == 'all':
+            entry.append(["Train mean elapsed time", train_mean_elapsed_time])
         entry.append(["Mean train epoch loss", ""])
         entry.append(["Max train epoch loss", ""])
         entry.append(["Min train epoch loss", ""])

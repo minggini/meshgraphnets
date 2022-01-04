@@ -110,34 +110,34 @@ def collate_fn(data_list):
 # this function returns a torch dataloader
 def load_dataset(path, split, add_targets=False, split_and_preprocess=False, batch_size=1, prefetch_factor=2):
   # DataLoader(FlagSimpleDataset(path='../../../mgn_dataset/flag_simple/', split='train'), batch_size=1)
-  # return DataLoader(FlagSimpleDataset(path=path, split=split, add_targets=add_targets, split_and_preprocess=split_and_preprocess), batch_size=batch_size, shuffle=True, num_workers=1)
+  #return DataLoader(FlagSimpleDataset(path=path, split=split, add_targets=add_targets, split_and_preprocess=split_and_preprocess), batch_size=batch_size, shuffle=True, num_workers=1)
   return DataLoader(FlagSimpleDatasetIterative(path=path, split=split, add_targets=add_targets, split_and_preprocess=split_and_preprocess), batch_size=batch_size, prefetch_factor=prefetch_factor, shuffle=False, num_workers=0)# , collate_fn=collate_fn)
 
-def batch_dataset(ds, batch_size):
-  """Batches input datasets."""
-  shapes = ds.output_shapes
-  types = ds.output_types
-  def renumber(buffer, frame):
-    nodes, cells = buffer
-    new_nodes, new_cells = frame
-    return nodes + new_nodes, tf.concat([cells, new_cells+nodes], axis=0)
+# def batch_dataset(ds, batch_size):
+#   """Batches input datasets."""
+#   shapes = ds.output_shapes
+#   types = ds.output_types
+#   def renumber(buffer, frame):
+#     nodes, cells = buffer
+#     new_nodes, new_cells = frame
+#     return nodes + new_nodes, tf.concat([cells, new_cells+nodes], axis=0)
 
-  def batch_accumulate(ds_window):
-    out = {}
-    for key, ds_val in ds_window.items():
-      initial = tf.zeros((0, shapes[key][1]), dtype=types[key])
-      if key == 'cells':
-        # renumber node indices in cells
-        num_nodes = ds_window['node_type'].map(lambda x: tf.shape(x)[0])
-        cells = tf.data.Dataset.zip((num_nodes, ds_val))
-        initial = (tf.constant(0, tf.int32), initial)
-        _, out[key] = cells.reduce(initial, renumber)
-      else:
-        merge = lambda prev, cur: tf.concat([prev, cur], axis=0)
-        out[key] = ds_val.reduce(initial, merge)
-    return out
+#   def batch_accumulate(ds_window):
+#     out = {}
+#     for key, ds_val in ds_window.items():
+#       initial = tf.zeros((0, shapes[key][1]), dtype=types[key])
+#       if key == 'cells':
+#         # renumber node indices in cells
+#         num_nodes = ds_window['node_type'].map(lambda x: tf.shape(x)[0])
+#         cells = tf.data.Dataset.zip((num_nodes, ds_val))
+#         initial = (tf.constant(0, tf.int32), initial)
+#         _, out[key] = cells.reduce(initial, renumber)
+#       else:
+#         merge = lambda prev, cur: tf.concat([prev, cur], axis=0)
+#         out[key] = ds_val.reduce(initial, merge)
+#     return out
 
-  if batch_size > 1:
-    ds = ds.window(batch_size, drop_remainder=True)
-    ds = ds.map(batch_accumulate, num_parallel_calls=8)
-  return ds
+#   if batch_size > 1:
+#     ds = ds.window(batch_size, drop_remainder=True)
+#     ds = ds.map(batch_accumulate, num_parallel_calls=8)
+#   return ds
