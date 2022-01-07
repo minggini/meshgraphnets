@@ -51,19 +51,19 @@ import matplotlib.pyplot as plt
 
 device = torch.device('cuda')
 
-os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+#os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 # train and evaluation configuration
 FLAGS = flags.FLAGS
 flags.DEFINE_enum('model', 'cloth', ['cfd', 'cloth','skirt'],
                   'Select model to run.')
-flags.DEFINE_enum('mode', 'eval', ['train', 'eval', 'all'],
+flags.DEFINE_enum('mode', 'train', ['train', 'eval', 'all'],
                   'Train model, or run evaluation, or run both.')
 flags.DEFINE_enum('rollout_split', 'valid', ['train', 'test', 'valid'],
                   'Dataset split to use for rollouts.')
 
-flags.DEFINE_integer('epochs', 1000, 'No. of training epochs') #original was 1,000,000
+flags.DEFINE_integer('epochs', 6, 'No. of training epochs') #original was 1,000,000
 flags.DEFINE_integer('trajectories', 1000, 'No. of training trajectories')
 flags.DEFINE_integer('num_rollouts', 10, 'No. of rollout trajectories')
 
@@ -72,8 +72,8 @@ flags.DEFINE_enum('core_model', 'encode_process_decode',
                   ['encode_process_decode', 'encode_process_decode_max_pooling', 'encode_process_decode_lstm',
                    'encode_process_decode_graph_structure_watcher', 'encode_process_decode_ripple'],
                   'Core model to be used')
-flags.DEFINE_enum('message_passing_aggregator', 'min', ['sum', 'max', 'min', 'mean'], 'No. of training epochs')
-flags.DEFINE_integer('message_passing_steps', 3, 'No. of training epochs')
+flags.DEFINE_enum('message_passing_aggregator', 'sum', ['sum', 'max', 'min', 'mean'], 'No. of training epochs')
+flags.DEFINE_integer('message_passing_steps', 15, 'No. of training epochs')
 flags.DEFINE_boolean('attention', False, 'whether attention is used or not')
 
 # ripple method configuration
@@ -112,7 +112,7 @@ start = time.time()
 start_datetime = datetime.datetime.fromtimestamp(start).strftime('%c')
 start_datetime_dash = start_datetime.replace(" ", "-").replace(":", "-")
 
-longest_datetime_dash = 'Mon-Dec-20-15-45-32-2021' #Thu-Dec-23-20-11-20-2021'
+longest_datetime_dash = 'Thu-Jan--6-15-45-44-2022'#'Tue-Jan--4-16-29-36-2022' #Thu-Dec-23-20-11-20-2021'
 
 
 root_dir = pathlib.Path(__file__).parent.resolve()
@@ -138,18 +138,19 @@ flags.DEFINE_string('logging_dir',
                     os.path.join(run_dir, 'logs'),
                     'Log file directory')
 flags.DEFINE_string('model_last_checkpoint_dir',
-                    None,
+                    #None,
+                    os.path.join(longest_dir, 'checkpoint_dir'),
                     #os.path.join(longest_dir, 'last_checkpoint_dir'),
                     #os.path.join('C:\\Users\\Mark\\iCloudDrive\\master_arbeit\\implementation\\meshgraphnets\\output\\flag_simple\\Tue-Nov-30-17-04-40-2021', 'checkpoint_dir'),
                     'Path to the checkpoint file of a network that should continue training')
 flags.DEFINE_string('optimizer_last_checkpoint_file',
-                    None,
-                    #os.path.join(longest_dir, 'epoch_optimizer_checkpoint_1.pth'),
+                    #None,
+                    os.path.join(longest_dir, 'trajectory_optimizer_checkpoint_1.pth'),
                     # 'C:\\Users\\Mark\\iCloudDrive\\master_arbeit\\implementation\\meshgraphnets\\output\\Sun-Sep-26-23-06-14-2021\\epoch_optimizer_checkpoint_1.pth',
                     'Path to the checkpoint file of a network that should continue training')
 flags.DEFINE_string('last_checkpoint_file',
-                    None,
-                    #os.path.join(longest_dir, 'epoch_scheduler_checkpoint_1.pth'),
+                    #None,
+                    os.path.join(longest_dir, 'trajectory_scheduler_checkpoint_1.pth'),
                     # 'C:\\Users\\Mark\\iCloudDrive\\master_arbeit\\implementation\\meshgraphnets\\output\\Sun-Sep-26-23-06-14-2021\\epoch_scheduler_checkpoint_1.pth',
                     'Path to the checkpoint file of a network that should continue training')
 
@@ -172,9 +173,9 @@ steps = None
 hpc_start_time = time.time()
 # bwcluster max time limitation of gpu_8, in seconds
 # leave 2 hours for possible evaluation
-hpc_default_max_time = 172800 - 3600 * 2
+# hpc_default_max_time = 172800 - 3600 * 2
 # hpc_default_max_time = 3 * 60
-hpc_max_time = hpc_start_time + hpc_default_max_time
+# hpc_max_time = hpc_start_time + hpc_default_max_time
 
 
 def squeeze_data_frame(data_frame):
@@ -301,10 +302,14 @@ def learner(model, params):
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, 0.1 + 1e-6, last_epoch=-1)
     trained_epoch = 0
     if FLAGS.model_last_checkpoint_dir is not None:
-        optimizer.load_state_dict(torch.load(os.path.join(FLAGS.model_last_checkpoint_dir, "epoch_optimizer_checkpoint_0.pth")))
-        scheduler.load_state_dict(torch.load(os.path.join(FLAGS.model_last_checkpoint_dir, "epoch_scheduler_checkpoint_0.pth")))
-        epoch_checkpoint = torch.load(os.path.join(FLAGS.model_last_checkpoint_dir, "epoch_checkpoint.pth"))
-        trained_epoch = epoch_checkpoint['epoch'] + 1
+        optimizer.load_state_dict(torch.load(os.path.join(FLAGS.model_last_checkpoint_dir, "trajectory_optimizer_checkpoint_1.pth")))
+        scheduler.load_state_dict(torch.load(os.path.join(FLAGS.model_last_checkpoint_dir, "trajectory_scheduler_checkpoint_1.pth")))
+        try:
+            epoch_checkpoint = torch.load(os.path.join(FLAGS.model_last_checkpoint_dir, "trajectory_checkpoint.pth"))
+            trained_epoch = epoch_checkpoint['epoch'] + 1
+        except:
+            trained_epoch = 0
+        
 
     # model training
     is_training = True
@@ -312,7 +317,7 @@ def learner(model, params):
     epoch_training_losses = []
 
     count = 0
-    pass_count = 200
+    pass_count = 500
     if FLAGS.model_last_checkpoint_dir is not None:
         pass_count = 0
     all_trajectory_train_losses = []
@@ -579,7 +584,7 @@ def main(argv):
                                       FLAGS.ripple_node_connection,
                                       FLAGS.ripple_node_ncross)
         if FLAGS.model_last_checkpoint_dir is not None:
-            model.load_model(os.path.join(FLAGS.model_last_checkpoint_dir, "epoch_checkpoint.pth"))
+            model.load_model(os.path.join(FLAGS.model_last_checkpoint_dir, "trajectory_model_checkpoint_1"))
             #model.load_model(os.path.join(FLAGS.model_last_checkpoint_dir, "model_checkpoint"))
             root_logger.info(
                 "Loaded checkpoint file in " + str(FLAGS.model_last_checkpoint_dir) + "and starting retraining...")
@@ -629,14 +634,14 @@ def main(argv):
                                                                saved_train_loss_record['all_trajectory_train_losses']
         train_end = time.time()
         train_elapsed_time_in_second = train_end - train_start
-        if FLAGS.model_last_checkpoint_dir is not None:
-            with open(os.path.join(Path(FLAGS.model_last_checkpoint_dir).parent, 'logs', 'train_elapsed_time_in_second.pkl'), 'rb') as pickle_file:
-                saved_train_elapsed_time_in_second = pickle.load(pickle_file)
-            train_elapsed_time_in_second += saved_train_elapsed_time_in_second
-        train_elapsed_time_in_second_pkl_file = os.path.join(FLAGS.logging_dir, 'train_elapsed_time_in_second.pkl')
-        Path(train_elapsed_time_in_second_pkl_file).touch()
-        with open(train_elapsed_time_in_second_pkl_file, 'wb') as f:
-            pickle.dump(train_elapsed_time_in_second, f)
+        # if FLAGS.model_last_checkpoint_dir is not None:
+        #     with open(os.path.join(Path(FLAGS.model_last_checkpoint_dir).parent, 'logs', 'train_elapsed_time_in_second.pkl'), 'rb') as pickle_file:
+        #         saved_train_elapsed_time_in_second = pickle.load(pickle_file)
+        #     train_elapsed_time_in_second += saved_train_elapsed_time_in_second
+        # train_elapsed_time_in_second_pkl_file = os.path.join(FLAGS.logging_dir, 'train_elapsed_time_in_second.pkl')
+        # Path(train_elapsed_time_in_second_pkl_file).touch()
+        # with open(train_elapsed_time_in_second_pkl_file, 'wb') as f:
+        #     pickle.dump(train_elapsed_time_in_second, f)
         train_mean_elapsed_time = str(
             datetime.timedelta(seconds=train_elapsed_time_in_second // (FLAGS.epochs * FLAGS.trajectories)))
         train_elapsed_time = str(datetime.timedelta(seconds=train_elapsed_time_in_second))
@@ -651,11 +656,11 @@ def main(argv):
                                       FLAGS.ripple_node_connection,
                                       FLAGS.ripple_node_ncross)
         if FLAGS.model_last_checkpoint_dir is not None:
-            model.load_model(os.path.join(FLAGS.model_last_checkpoint_dir, "epoch_model_checkpoint_0"))
+            model.load_model(os.path.join(FLAGS.model_last_checkpoint_dir, "trajectory_model_checkpoint_1"))
             root_logger.info(
                 "Loaded checkpoint file in " + str(FLAGS.model_last_checkpoint_dir) + "and starting retraining...")
         else:
-            model.load_model(os.path.join(run_dir, "checkpoint_dir", "epoch_model_checkpoint_0"))
+            model.load_model(os.path.join(run_dir, "checkpoint_dir", "trajectory_model_checkpoint_1"))
             root_logger.info("Loaded model from " + str(run_dir))
         model.evaluate()
         model.to(device)
@@ -677,20 +682,20 @@ def main(argv):
     end_datetime = datetime.datetime.fromtimestamp(end).strftime('%c')
     root_logger.info("Program ended at time " + end_datetime)
     elapsed_time_in_second = end - start
-    if FLAGS.model_last_checkpoint_dir is not None:
-        with open(
-                os.path.join(Path(FLAGS.model_last_checkpoint_dir).parent, 'logs', 'elapsed_time_in_second.pkl'),
-                'rb') as pickle_file:
-            saved_elapsed_time_in_second = pickle.load(pickle_file)
-        elapsed_time_in_second += saved_elapsed_time_in_second
+    # if FLAGS.model_last_checkpoint_dir is not None:
+    #     with open(
+    #             os.path.join(Path(FLAGS.model_last_checkpoint_dir).parent, 'logs', 'elapsed_time_in_second.pkl'),
+    #             'rb') as pickle_file:
+    #         saved_elapsed_time_in_second = pickle.load(pickle_file)
+    #     elapsed_time_in_second += saved_elapsed_time_in_second
     elapsed_time = str(datetime.timedelta(seconds=elapsed_time_in_second))
-    if FLAGS.model_last_checkpoint_dir is not None:
-        elapsed_time_in_second_pkl_file = os.path.join(os.path.join(run_dir, 'logs'), 'elapsed_time_in_second.pkl')
-    else:
-        elapsed_time_in_second_pkl_file = os.path.join(FLAGS.logging_dir, 'elapsed_time_in_second.pkl')
-    Path(elapsed_time_in_second_pkl_file).touch()
-    with open(elapsed_time_in_second_pkl_file, 'wb') as f:
-        pickle.dump(elapsed_time_in_second, f)
+    # if FLAGS.model_last_checkpoint_dir is not None:
+    #     elapsed_time_in_second_pkl_file = os.path.join(os.path.join(run_dir, 'logs'), 'elapsed_time_in_second.pkl')
+    # else:
+    #     elapsed_time_in_second_pkl_file = os.path.join(FLAGS.logging_dir, 'elapsed_time_in_second.pkl')
+    # Path(elapsed_time_in_second_pkl_file).touch()
+    # with open(elapsed_time_in_second_pkl_file, 'wb') as f:
+    #     pickle.dump(elapsed_time_in_second, f)
 
     # run summary
     root_logger.info("")

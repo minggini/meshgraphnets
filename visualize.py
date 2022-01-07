@@ -23,7 +23,7 @@ from absl import app
 from absl import flags
 
 import matplotlib as mpl
-mpl.rcParams['animation.ffmpeg_path'] = r'D:\Defaults\ffmpeg-4.4.1-full_build\bin\ffmpeg.exe'
+mpl.rcParams['animation.ffmpeg_path'] = r'/usr/bin/ffmpeg'
 
 from matplotlib import animation
 import matplotlib.pyplot as plt
@@ -36,7 +36,7 @@ rollout_dir = os.path.join(root_dir, 'output', dataset_name, longest_datetime_da
 FLAGS = flags.FLAGS
 flags.DEFINE_string('rollout_path',
                     #rollout_dir, 
-                    r'C:\Users\MJ\Documents\GitHub\meshgraphnets\output\flag_simple\Fri-Dec-31-22-09-36-2021\rollout\rollout.pkl',
+                    r'/home/workspace/meshgraphnets/output/flag_simple/Tue-Jan--4-16-29-36-2022/rollout/rollout.pkl',
                     'Path to rollout pickle file')
 
 
@@ -46,7 +46,7 @@ def main(unused_argv):
 
   fig = plt.figure(figsize=(10, 10))
   ax = fig.add_subplot(111, projection='3d')
-  skip = 2
+  skip = 10
   num_steps = rollout_data[0]['gt_pos'].shape[0]
   num_frames = len(rollout_data) * num_steps // skip # len(rollout_data) = 10, num_steps = 198
 
@@ -75,8 +75,8 @@ def main(unused_argv):
   anim = animation.FuncAnimation(fig, animate, frames=num_frames, interval=100)
   plt.show(block=True)
 
-  FFwriter = animation.FFMpegWriter(fps=60)
-  anim.save(r"D:\flag_simple_gt.mp4", writer=FFwriter)
+  FFwriter = animation.FFMpegWriter(fps=10)
+  anim.save(r"/home/workspace/meshgraphnets/output/flag_simple/Tue-Jan--4-16-29-36-2022/rollout/flag_simple_15_gt.mp4", writer=FFwriter)
 
 
 if __name__ == '__main__':
