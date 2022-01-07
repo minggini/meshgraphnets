@@ -149,8 +149,8 @@ flags.DEFINE_string('optimizer_last_checkpoint_file',
                     # 'C:\\Users\\Mark\\iCloudDrive\\master_arbeit\\implementation\\meshgraphnets\\output\\Sun-Sep-26-23-06-14-2021\\epoch_optimizer_checkpoint_1.pth',
                     'Path to the checkpoint file of a network that should continue training')
 flags.DEFINE_string('last_checkpoint_file',
-                    #None,
-                    os.path.join(longest_dir, 'trajectory_scheduler_checkpoint_1.pth'),
+                    None,
+                    #os.path.join(longest_dir, 'trajectory_scheduler_checkpoint_1.pth'),
                     # 'C:\\Users\\Mark\\iCloudDrive\\master_arbeit\\implementation\\meshgraphnets\\output\\Sun-Sep-26-23-06-14-2021\\epoch_scheduler_checkpoint_1.pth',
                     'Path to the checkpoint file of a network that should continue training')
 
